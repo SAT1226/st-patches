@@ -1,0 +1,204 @@
+diff -uprN st-0.9/st.c st-0.9scrollbar/st.c
+--- st-0.9/st.c	2022-11-04 19:49:01.480954947 +0900
++++ st-0.9scrollbar/st.c	2022-11-04 18:07:36.935949217 +0900
+@@ -233,6 +233,7 @@ static STREscape strescseq;
+ static int iofd = 1;
+ static int cmdfd;
+ static pid_t pid;
++static int maxhist = 0;
+ 
+ static const uchar utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
+ static const uchar utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
+@@ -1065,6 +1066,25 @@ tswapscreen(void)
+ }
+ 
+ void
++mousescroll(int percent)
++{
++	if (percent > 100) percent = 100;
++	if (percent < 0) percent = 0;
++
++	int scr = (int)((double)(maxhist) * (double)(1.0 - percent / 100.0));
++	int n = term.scr - scr;
++
++	if(n > 0) {
++		Arg arg = (Arg) { .i = n };
++		kscrolldown(&arg);
++	}
++	if(n < 0) {
++		Arg arg = (Arg) { .i = -n };
++		kscrollup(&arg);
++	}
++}
++
++void
+ kscrolldown(const Arg* a)
+ {
+ 	int n = a->i;
+@@ -1090,6 +1110,15 @@ kscrollup(const Arg* a)
+ 	if (n < 0)
+ 		n = term.row + n;
+ 
++	if ((maxhist - 1 < term.scr + n) || !(term.scr <= HISTSIZE-n)) {
++		n = maxhist - term.scr;
++		term.scr = maxhist;
++		selscroll(0, n);
++		tfulldirt();
++
++		return;
++	}
++
+ 	if (term.scr <= HISTSIZE-n) {
+ 		term.scr += n;
+ 		selscroll(0, n);
+@@ -1134,6 +1163,7 @@ tscrollup(int orig, int n, int copyhist)
+ 	LIMIT(n, 0, term.bot-orig+1);
+ 
+ 	if (copyhist) {
++		maxhist = (maxhist + 1 < HISTSIZE) ? maxhist + 1 : HISTSIZE;
+ 		term.histi = (term.histi + 1) % HISTSIZE;
+ 		temp = term.hist[term.histi];
+ 		term.hist[term.histi] = term.line[orig];
+@@ -2714,6 +2744,7 @@ draw(void)
+ 				term.ocx, term.ocy, term.line[term.ocy][term.ocx]);
+ 	term.ocx = cx;
+ 	term.ocy = term.c.y;
++	xdrawscrollbar(maxhist, term.scr, term.row);
+ 	xfinishdraw();
+ 	if (ocx != term.ocx || ocy != term.ocy)
+ 		xximspot(term.ocx, term.ocy);
+diff -uprN st-0.9/st.h st-0.9scrollbar/st.h
+--- st-0.9/st.h	2022-11-04 19:49:01.480954947 +0900
++++ st-0.9scrollbar/st.h	2022-11-04 18:07:33.732617280 +0900
+@@ -83,6 +83,7 @@ void draw(void);
+ 
+ void kscrolldown(const Arg *);
+ void kscrollup(const Arg *);
++void mousescroll(int);
+ void printscreen(const Arg *);
+ void printsel(const Arg *);
+ void sendbreak(const Arg *);
+diff -uprN st-0.9/win.h st-0.9scrollbar/win.h
+--- st-0.9/win.h	2022-10-05 02:41:26.000000000 +0900
++++ st-0.9scrollbar/win.h	2022-11-04 18:22:03.827003912 +0900
+@@ -39,3 +39,4 @@ void xsetpointermotion(int);
+ void xsetsel(char *);
+ int xstartdraw(void);
+ void xximspot(int, int);
++void xdrawscrollbar(int, int, int);
+diff -uprN st-0.9/x.c st-0.9scrollbar/x.c
+--- st-0.9/x.c	2022-10-05 02:41:26.000000000 +0900
++++ st-0.9scrollbar/x.c	2022-11-17 23:48:01.098564647 +0900
+@@ -252,6 +252,12 @@ static char *opt_line  = NULL;
+ static char *opt_name  = NULL;
+ static char *opt_title = NULL;
+ 
++static int scrollstart = 0;
++static int scrollbarpos = 0;
++static int scrollbarheight = 0;
++static int scrollbarwidth = 0;
++static int scrollclickpos = 0;
++
+ static uint buttons; /* bit field of pressed buttons */
+ 
+ void
+@@ -499,7 +505,30 @@ bpress(XEvent *e)
+ 		xsel.tclick2 = xsel.tclick1;
+ 		xsel.tclick1 = now;
+ 
+-		selstart(evcol(e), evrow(e), snap);
++		if(e->xbutton.x - borderpx <= win.tw)
++			selstart(evcol(e), evrow(e), snap);
++		else {
++			if(scrollbarpos < e->xbutton.y && e->xbutton.y < scrollbarpos + scrollbarheight) {
++				scrollstart = 1;
++				scrollclickpos = e->xbutton.y - scrollbarpos;
++			}
++			else {
++				int pos = e->xbutton.y - scrollbarheight / 2;
++
++				if(pos < 0) {
++					pos = 0;
++					scrollclickpos = e->xbutton.y;
++				}
++				else if (e->xbutton.y + scrollbarheight / 2 > win.h) {
++					pos = win.h - scrollbarheight;
++					scrollclickpos = e->xbutton.y - pos;
++				}
++				else scrollclickpos = scrollbarheight / 2;
++
++				scrollstart = 1;
++				mousescroll((int)((double)(pos) / (double)(win.h - scrollbarheight) * 100.0));
++			}
++		}
+ 	}
+ }
+ 
+@@ -709,8 +738,10 @@ brelease(XEvent *e)
+ 
+ 	if (mouseaction(e, 1))
+ 		return;
+-	if (btn == Button1)
++	if (btn == Button1) {
+ 		mousesel(e, 1);
++		scrollstart = 0;
++	}
+ }
+ 
+ void
+@@ -722,6 +753,9 @@ bmotion(XEvent *e)
+ 	}
+ 
+ 	mousesel(e, 0);
++	if(scrollstart == 1) {
++		mousescroll((int)((double)(e->xbutton.y - scrollclickpos) / (double)(win.h - scrollbarheight) * 100.0));
++	}
+ }
+ 
+ void
+@@ -1031,6 +1065,7 @@ xloadfonts(const char *fontstr, double f
+ 	/* Setting character width and height. */
+ 	win.cw = ceilf(dc.font.width * cwscale);
+ 	win.ch = ceilf(dc.font.height * chscale);
++	scrollbarwidth = dc.font.width;
+ 
+ 	FcPatternDel(pattern, FC_SLANT);
+ 	FcPatternAddInteger(pattern, FC_SLANT, FC_SLANT_ITALIC);
+@@ -1687,6 +1722,28 @@ xfinishdraw(void)
+ }
+ 
+ void
++xdrawscrollbar(int m, int p, int h)
++{
++	int height = 0, pos = 0;
++
++	if(m !=0) {
++		height = ((double)h / (double)(m + h)) * win.h;
++		pos = ((double)p / (double)(m + h)) * win.h;
++	}
++	else height = pos = 0;
++
++	if(height < 0) height = 0;
++	if(height > win.h) height = win.h;
++
++	scrollbarheight = height;
++	scrollbarpos = win.h - pos - height;
++
++	XSetForeground(xw.dpy, dc.gc, dc.col[defaultfg].pixel);
++	XFillRectangle(xw.dpy, xw.buf, dc.gc, win.w - scrollbarwidth, scrollbarpos, win.w, scrollbarheight);
++}
++
++
++void
+ xximspot(int x, int y)
+ {
+ 	if (xw.ime.xic == NULL)
+@@ -1905,7 +1962,7 @@ resize(XEvent *e)
+ 	if (e->xconfigure.width == win.w && e->xconfigure.height == win.h)
+ 		return;
+ 
+-	cresize(e->xconfigure.width, e->xconfigure.height);
++	cresize(e->xconfigure.width - 1, e->xconfigure.height);
+ }
+ 
+ void
