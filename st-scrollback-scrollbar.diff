@@ -88,7 +88,7 @@ diff -uprN st-0.9/win.h st-0.9scrollbar/win.h
 +void xdrawscrollbar(int, int, int);
 diff -uprN st-0.9/x.c st-0.9scrollbar/x.c
 --- st-0.9/x.c	2022-10-05 02:41:26.000000000 +0900
-+++ st-0.9scrollbar/x.c	2022-11-17 23:48:01.098564647 +0900
++++ st-0.9scrollbar/x.c	2022-12-05 20:19:35.251774480 +0900
 @@ -252,6 +252,12 @@ static char *opt_line  = NULL;
  static char *opt_name  = NULL;
  static char *opt_title = NULL;
@@ -156,6 +156,22 @@ diff -uprN st-0.9/x.c st-0.9scrollbar/x.c
  }
  
  void
+@@ -736,11 +770,11 @@ cresize(int width, int height)
+ 
+ 	col = (win.w - 2 * borderpx) / win.cw;
+ 	row = (win.h - 2 * borderpx) / win.ch;
+-	col = MAX(1, col);
+-	row = MAX(1, row);
++	col = MAX(2, col);
++	row = MAX(2, row);
+ 
+-	tresize(col, row);
+-	xresize(col, row);
++	tresize(col - 1, row);
++	xresize(col - 1, row);
+ 	ttyresize(win.tw, win.th);
+ }
+ 
 @@ -1031,6 +1065,7 @@ xloadfonts(const char *fontstr, double f
  	/* Setting character width and height. */
  	win.cw = ceilf(dc.font.width * cwscale);
@@ -193,12 +209,3 @@ diff -uprN st-0.9/x.c st-0.9scrollbar/x.c
  xximspot(int x, int y)
  {
  	if (xw.ime.xic == NULL)
-@@ -1905,7 +1962,7 @@ resize(XEvent *e)
- 	if (e->xconfigure.width == win.w && e->xconfigure.height == win.h)
- 		return;
- 
--	cresize(e->xconfigure.width, e->xconfigure.height);
-+	cresize(e->xconfigure.width - 1, e->xconfigure.height);
- }
- 
- void
